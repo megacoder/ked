@@ -1,0 +1,640 @@
+!   Copyright © 1998 - 2008, John Powers.
+!
+!  A nice, but purely cosmetic, improvement to the way that EVE
+!  offers a choice when given an ambiguous command. Standard EVE
+!  displays the choices in random order (e.g, "e" offers "extend"
+!  and "erase" options jumbled together with sundry others in a
+!  right old mess). This module creates an array KED_XA_AMBIG_IDX,
+!  which defines the order in which these are to be displayed, so
+!  you can modify this to put related commands next to each other,
+!  or however you like. It makes EVE easier to use.
+!
+!  This is designed so it does not report errors if the array is
+!  wrong or incomplete.  If two choices being displayed have the
+!  same array value, they will be put out in EVE's original random
+!  order.  If any commands are missing in the array and have no
+!  assigned value, they will be added in their EVE-supplied order
+!  at the end.  If an invalid command is put into the array, it
+!  will be ignored.
+!
+!  Version 2 now includes an option to suppress the choice display.
+!  If you set the array entry to -1, this will remove the choice
+!  from the display. This is useful for commands that are merely
+!  abbreviations for others (like 'ex' for 'exit', or 'extend' is a
+!  synonym for 'extend_eve') - and for commands we never use any
+!  more (like the 'set file backup' stuff), or that we only use in
+!  batch (/nodisplay) mode (like 'answer').  It helps cut down on
+!  duplication and unwanted information in the choice display.
+!
+!  Note that if you have been stupid and set so many entries to -1
+!  that there is no choice left, then it reinstates the original.
+!  To prevent this happening, design the choice ordering array more
+!  intelligently.  If there is exactly 1 left, and we are actually
+!  doing the command (not asking for help), then just do it.
+!
+
+module ked_ambig_cmd ident "V02-091"
+
+variable ked_xa_ambig_idx,		! Array of command indexes
+	 ked_xb_ambig_choice_buf,	! Buffer to write choice
+	 ked_xb_ambig_saved_buf,	! Buffer to save original
+	 ked_xl_running_kept;		! (In case its not here)
+! -+-+-
+!
+
+procedure ked_init_ambig_cmd_processing ! Initialise the variables
+
+! Buffers for rearranging the ambiguous choice list
+
+ked_xb_ambig_choice_buf := eve$init_buffer ("$KED$AMBIG$OUTPUT$","");
+ked_xb_ambig_saved_buf  := eve$init_buffer ("$KED$AMBIG$INPUT$","");
+
+!
+! The ambiguous command display-order array. Rearrange this to your
+! heart's content. It will display options with the lowest values
+! first.  Also set value to -1 to suppress display of the option.
+
+ked_xa_ambig_idx                         := CREATE_ARRAY;
+ked_xa_ambig_idx {"ATTACH"}                       :=   1;
+ked_xa_ambig_idx {"ASCII CHARACTER"}              :=   2;
+ked_xa_ambig_idx {"ANSWER"}                       :=  -1;
+
+ked_xa_ambig_idx {"BOTTOM"}                       :=   1;
+ked_xa_ambig_idx {"BUFFER"}                       :=   2;
+ked_xa_ambig_idx {"BRACKET MATCH"}                :=   3;
+ked_xa_ambig_idx {"BRACKET LEFT"}                 :=   4;
+ked_xa_ambig_idx {"BRACKET RIGHT"}                :=   5;
+ked_xa_ambig_idx {"BRACKET CLEAR"}                :=   6;
+ked_xa_ambig_idx {"BRACKET QUOTE"}                :=   7;
+ked_xa_ambig_idx {"BRACKET DEFINE"}               :=   8;
+ked_xa_ambig_idx {"BRACKET UNDEFINE"}             :=   9;
+ked_xa_ambig_idx {"BRACKET SHOW"}                 :=  10;
+ked_xa_ambig_idx {"BOX SELECT"}                   :=  11;
+ked_xa_ambig_idx {"BOX CUT"}                      :=  12;
+ked_xa_ambig_idx {"BOX COPY"}                     :=  13;
+ked_xa_ambig_idx {"BOX PASTE"}                    :=  14;
+ked_xa_ambig_idx {"BOX CUT INSERT"}               :=  15;
+ked_xa_ambig_idx {"BOX CUT OVERSTRIKE"}           :=  16;
+ked_xa_ambig_idx {"BOX PASTE INSERT"}             :=  17;
+ked_xa_ambig_idx {"BOX PASTE OVERSTRIKE"}         :=  18;
+ked_xa_ambig_idx {"BOX DISPLAY"}                  :=  19; 
+ked_xa_ambig_idx {"BOX ACTIVATE"}                 :=  20;
+ked_xa_ambig_idx {"BOX HIDE"}                     :=  21;
+ked_xa_ambig_idx {"BOX NEXT"}                     :=  22;
+ked_xa_ambig_idx {"BOX PREVIOUS"}                 :=  23;
+ked_xa_ambig_idx {"BOX REDRAW"}                   :=  24;
+ked_xa_ambig_idx {"BOX REDRAW ALL"}               :=  0;
+ked_xa_ambig_idx {"BOX CLEAR"}                    :=  25;
+ked_xa_ambig_idx {"BOX MARK"}                     :=  26;
+ked_xa_ambig_idx {"BOX ENHANCEMENTS"}             :=  27;
+
+ked_xa_ambig_idx {"CUT"}                          :=   1;
+ked_xa_ambig_idx {"COPY"}                         :=   2;
+ked_xa_ambig_idx {"CURSOR TOP"}                   :=   3;
+ked_xa_ambig_idx {"CURSOR BOTTOM"}                :=   4;
+ked_xa_ambig_idx {"CURSOR CENTRE"}                :=   5;
+ked_xa_ambig_idx {"CENTER LINE"}                  :=   6;
+ked_xa_ambig_idx {"CAPITALIZE WORD"}              :=   7;
+ked_xa_ambig_idx {"CHANGE DIRECTION"}             :=   8;
+ked_xa_ambig_idx {"CHANGE MODE"}                  :=   9;
+ked_xa_ambig_idx {"CONVERT TABS"}                 :=  10;
+ked_xa_ambig_idx {"CHOP TEXT"}                    :=  11;
+ked_xa_ambig_idx {"COLOUR PROGRAM"}               :=  12;
+ked_xa_ambig_idx {"COLOUR RANGE"}                 :=  13;
+ked_xa_ambig_idx {"COLOUR CLEAR"}                 :=  14;
+ked_xa_ambig_idx {"COLOUR SHOW"}                  :=  15;
+ked_xa_ambig_idx {"COLOUR SET"}                   :=  16;
+ked_xa_ambig_idx {"COLUMN OF TEXT"}               :=  17;
+ked_xa_ambig_idx {"COMMENT LINE"}                 :=  18;
+ked_xa_ambig_idx {"COMMENT BEGIN"}                :=  19;
+ked_xa_ambig_idx {"COMMENT END"}                  :=  20;
+ked_xa_ambig_idx {"COMMENT CHARACTER"}            :=  21;
+ked_xa_ambig_idx {"CONTINUATION LINE"}            :=  22;
+ked_xa_ambig_idx {"CHANGE BLOCK INDENTION"}       :=  23;
+ked_xa_ambig_idx {"CHANGE AUTO INDENTION"}        :=  24;
+ked_xa_ambig_idx {"CHANGE INDENT COMMENTS"}       :=  25;
+ked_xa_ambig_idx {"CLEAR SORTKEYS"}               :=  26;
+ked_xa_ambig_idx {"CHANGE HIDE"}                  :=  27;
+ked_xa_ambig_idx {"CHECK TYPING"}                 :=  28;
+ked_xa_ambig_idx {"CLEAR CHECK"}                  :=  29;
+
+ked_xa_ambig_idx {"CLEAR ANSWERS"}                :=  -1;
+ked_xa_ambig_idx {"DO"}                           :=   1;
+ked_xa_ambig_idx {"DCL"}                          :=   2;
+ked_xa_ambig_idx {"DELETE"}                       :=   3;
+ked_xa_ambig_idx {"DELETE ALL"}                   :=   4;
+ked_xa_ambig_idx {"DELETE BUFFER"}                :=   5;
+ked_xa_ambig_idx {"DELETE WINDOW"}                :=   6;
+ked_xa_ambig_idx {"DEFINE"}                       :=  -1;
+ked_xa_ambig_idx {"DEFINE KEY"}                   :=   7;
+ked_xa_ambig_idx {"DEFINE MENU ENTRY"}            :=   8;
+ked_xa_ambig_idx {"DECREASE INDENTION"}           :=   9;
+ked_xa_ambig_idx {"EX"}                           :=  -1;
+ked_xa_ambig_idx {"EXIT"}                         :=   1;
+ked_xa_ambig_idx {"EXIT ALL"}                     :=   2;
+ked_xa_ambig_idx {"EXIT SESSION"}                 :=   3;
+ked_xa_ambig_idx {"EXIT THIS"}                    :=   4;
+ked_xa_ambig_idx {"END OF LINE"}                  :=   5;
+ked_xa_ambig_idx {"ENLARGE WINDOW"}               :=   6;
+ked_xa_ambig_idx {"ERASE CHARACTER"}              :=   7;
+ked_xa_ambig_idx {"ERASE LINE"}                   :=   8;
+ked_xa_ambig_idx {"ERASE WORD"}                   :=   9;
+ked_xa_ambig_idx {"ERASE PREVIOUS WORD"}          :=  10;
+ked_xa_ambig_idx {"ERASE START OF LINE"}          :=  11;
+ked_xa_ambig_idx {"EXTEND"}                       :=  -1;
+ked_xa_ambig_idx {"EXTEND THIS"}                  :=  12;
+ked_xa_ambig_idx {"EXTEND ALL"}                   :=  13;
+ked_xa_ambig_idx {"EXTEND EVE"}                   :=  -1;
+ked_xa_ambig_idx {"EXTEND TPU"}                   :=  14;
+ked_xa_ambig_idx {"FIND"}                         :=   1;
+ked_xa_ambig_idx {"FIND NEXT"}                    :=   2;
+ked_xa_ambig_idx {"FIND SELECTED"}                :=   3;
+ked_xa_ambig_idx {"FIND ALL"}                     :=   4;
+ked_xa_ambig_idx {"FIND THIS"}                    :=   5;
+ked_xa_ambig_idx {"FILL"}                         :=   6;
+ked_xa_ambig_idx {"FILL RANGE"}                   :=   7;
+ked_xa_ambig_idx {"FILL PARAGRAPH"}               :=   8;
+ked_xa_ambig_idx {"FORWARD"}                      :=   9;
+ked_xa_ambig_idx {"FORTRAN CONTINUE CHARACTER"}   :=  -1;
+ked_xa_ambig_idx {"FIRST COLUMN CHARACTER"}       :=  10;
+ked_xa_ambig_idx {"GO TO"}                        :=   1;
+ked_xa_ambig_idx {"GLOBAL REPLACE"}               :=   2;
+ked_xa_ambig_idx {"GET"}                          :=   3;
+ked_xa_ambig_idx {"GET FILE"}                     :=   4;
+ked_xa_ambig_idx {"GET WILDCARDED FILES"}         :=   5;
+ked_xa_ambig_idx {"GET THIS"}                     :=  -1;
+ked_xa_ambig_idx {"INCLUDE FILE"}                 :=   1;
+ked_xa_ambig_idx {"INSERT HERE"}                  :=   2;
+ked_xa_ambig_idx {"INSERT MODE"}                  :=   3;
+ked_xa_ambig_idx {"INSERT PAGE BREAK"}            :=   4;
+ked_xa_ambig_idx {"INSERT DATE"}                  :=   5;
+ked_xa_ambig_idx {"INSERT TIME"}                  :=   6;
+ked_xa_ambig_idx {"INDENT VALUE"}                 :=   7;
+ked_xa_ambig_idx {"INDENT LINE"}                  :=   8;
+ked_xa_ambig_idx {"INDENT INCREMENT"}             :=   9;
+ked_xa_ambig_idx {"INDENT CURRENT"}               :=  10;
+ked_xa_ambig_idx {"INDENT NOTABS"}                :=  11;
+ked_xa_ambig_idx {"INDENT TABS"}                  :=  12;
+ked_xa_ambig_idx {"INCREASE INDENTION"}           :=  13;
+ked_xa_ambig_idx {"LINE"}                         :=   1;
+ked_xa_ambig_idx {"LEARN"}                        :=   2;
+ked_xa_ambig_idx {"LOWERCASE WORD"}               :=   3;
+ked_xa_ambig_idx {"LIST FILES"}                   :=   4;
+ked_xa_ambig_idx {"MOVE UP"}                      :=   1;
+ked_xa_ambig_idx {"MOVE DOWN"}                    :=   2;
+ked_xa_ambig_idx {"MOVE LEFT"}                    :=   3;
+ked_xa_ambig_idx {"MOVE RIGHT"}                   :=   4;
+ked_xa_ambig_idx {"MOVE BY WORD"}                 :=   5;
+ked_xa_ambig_idx {"MOVE BY LINE"}                 :=   6;
+ked_xa_ambig_idx {"MOVE BY PAGE"}                 :=   7;
+ked_xa_ambig_idx {"MATCH INDENT"}                 :=   8;
+ked_xa_ambig_idx {"MATCH INDENT FORWARD"}         :=   9;
+ked_xa_ambig_idx {"MATCH INDENT REVERSE"}         :=  10; 
+ked_xa_ambig_idx {"MODIFY DEFAULT"}               :=  11;
+ked_xa_ambig_idx {"NEW"}                          :=   1;
+ked_xa_ambig_idx {"NEXT_BUFFER"}                  :=   2;
+ked_xa_ambig_idx {"NEXT SESSION BUFFER"}          :=   3;
+ked_xa_ambig_idx {"NEXT SCREEN"}                  :=   4;
+ked_xa_ambig_idx {"NEXT WINDOW"}                  :=   5;
+ked_xa_ambig_idx {"NEXT DIFFERENCE"}              :=   6;
+ked_xa_ambig_idx {"NEXT REAL DIFFERENCE"}         :=   7;
+ked_xa_ambig_idx {"NEXT TYPO"}                    :=   8;
+ked_xa_ambig_idx {"NO RULER"}                     :=   9;
+ked_xa_ambig_idx {"OPEN"}                         :=   1;
+ked_xa_ambig_idx {"OPEN SELECTED"}                :=   2;
+ked_xa_ambig_idx {"ONE WINDOW"}                   :=   3;
+ked_xa_ambig_idx {"OTHER WINDOW"}                 :=   4;
+ked_xa_ambig_idx {"OVERSTRIKE MODE"}              :=   5;
+ked_xa_ambig_idx {"OFFSET"}                       :=   6;
+ked_xa_ambig_idx {"PASTE"}                        :=   1;
+ked_xa_ambig_idx {"PREVIOUS WINDOW"}              :=   2;
+ked_xa_ambig_idx {"PREVIOUS BUFFER"}              :=   3;
+ked_xa_ambig_idx {"PREVIOUS SESSION BUFFER"}      :=   3;
+ked_xa_ambig_idx {"PREVIOUS SCREEN"}              :=   4;
+ked_xa_ambig_idx {"PREVIOUS TYPO"}                :=   5;
+ked_xa_ambig_idx {"PAGINATE"}                     :=   6;
+ked_xa_ambig_idx {"POST CONTINUE CHARACTER"}      :=   7;
+ked_xa_ambig_idx {"PRE CONTINUE CHARACTER"}       :=   8;
+ked_xa_ambig_idx {"QUIT"}                         :=   1;
+ked_xa_ambig_idx {"QUOTE"}                        :=   2;
+ked_xa_ambig_idx {"QUIT ALL"}                     :=   3;
+ked_xa_ambig_idx {"QUIT SESSION"}                 :=   5;
+ked_xa_ambig_idx {"QUIT THIS"}                    :=   4;
+ked_xa_ambig_idx {"REPLACE"}                      :=   1;
+ked_xa_ambig_idx {"REFRESH"}                      :=   2;
+ked_xa_ambig_idx {"RESET"}                        :=   3;
+ked_xa_ambig_idx {"REMOVE"}                       :=   4;
+ked_xa_ambig_idx {"REPEAT"}                       :=   5;
+ked_xa_ambig_idx {"REVERSE"}                      :=   6;
+ked_xa_ambig_idx {"REWRITE"}                      :=   7;
+ked_xa_ambig_idx {"RULER"}                        :=   8;
+ked_xa_ambig_idx {"RESTORE"}                      :=   9;
+ked_xa_ambig_idx {"RESTORE CHARACTER"}            :=  10;
+ked_xa_ambig_idx {"RESTORE WORD"}                 :=  11;
+ked_xa_ambig_idx {"RESTORE LINE"}                 :=  12;
+ked_xa_ambig_idx {"RESTORE SENTENCE"}             :=  13;
+ked_xa_ambig_idx {"RESTORE SELECTION"}            :=  14;
+ked_xa_ambig_idx {"RESTORE BOX SELECTION"}        :=  15;
+ked_xa_ambig_idx {"RECOVER"}                      :=  16;
+ked_xa_ambig_idx {"RECOVER BUFFER"}               :=  17;
+ked_xa_ambig_idx {"RECOVER BUFFER ALL"}           :=  18;
+ked_xa_ambig_idx {"RECALL"}                       :=  19;
+ked_xa_ambig_idx {"RETURN"}                       :=  20;
+ked_xa_ambig_idx {"REMOVE BLANK LINES"}           :=  21;
+ked_xa_ambig_idx {"REMEMBER"}                     :=  -1;
+ked_xa_ambig_idx {"SELECT"}                       :=   1;
+ked_xa_ambig_idx {"SELECT ALL"}                   :=   2;
+ked_xa_ambig_idx {"SELECT COLUMN"}                :=   3;
+ked_xa_ambig_idx {"SHIFT LEFT"}                   :=   4;
+ked_xa_ambig_idx {"SHIFT RIGHT"}                  :=   5;
+ked_xa_ambig_idx {"START OF LINE"}                :=   6;
+ked_xa_ambig_idx {"SEPARATE WINDOWS"}             :=   7;
+ked_xa_ambig_idx {"SAVE"}                         :=   8;
+ked_xa_ambig_idx {"SAVE FILE"}                    :=   9;
+ked_xa_ambig_idx {"SAVE FILE AS"}                 :=  10;
+ked_xa_ambig_idx {"SAVE EXTENDED EVE"}            :=  11;
+ked_xa_ambig_idx {"SAVE EXTENDED"}                :=  12;
+ked_xa_ambig_idx {"SAVE EXTENDED TPU"}            :=  13;
+ked_xa_ambig_idx {"SAVE ATTRIBUTES"}              :=  14;
+ked_xa_ambig_idx {"SAVE SYSTEM ATTRIBUTES"}       :=  15;
+ked_xa_ambig_idx {"SAVE JOURNAL"}                 :=  16;
+ked_xa_ambig_idx {"SHOW"}                         :=  17;
+ked_xa_ambig_idx {"SHOW BUFFERS"}                 :=  18;
+ked_xa_ambig_idx {"SHOW SYSTEM BUFFERS"}          :=  19;
+ked_xa_ambig_idx {"SHOW DEFAULTS BUFFER"}         :=  20;
+ked_xa_ambig_idx {"SHOW KEY"}                     :=  21;
+ked_xa_ambig_idx {"SHOW WILDCARDS"}               :=  22;
+ked_xa_ambig_idx {"SHOW EXIT DEFAULT"}            :=  23;
+ked_xa_ambig_idx {"SHOW QUIT DEFAULT"}            :=  24;
+ked_xa_ambig_idx {"SHOW MESSAGE SUPPRESSION"}     :=  25;
+ked_xa_ambig_idx {"SHOW CONTROL CHARACTERS"}      :=  26;
+ked_xa_ambig_idx {"SHOW SUMMARY"}                 :=  27;
+ked_xa_ambig_idx {"SHOW FILE BACKUP"}             :=  -1;
+ked_xa_ambig_idx {"SHRINK WINDOW"}                :=  28;
+ked_xa_ambig_idx {"SPLIT WINDOW"}                 :=  29;
+ked_xa_ambig_idx {"SHELL"}                        :=  30;
+ked_xa_ambig_idx {"SPAWN"}                        :=  31;
+ked_xa_ambig_idx {"SCROLL UP"}                    :=  32;
+ked_xa_ambig_idx {"SCROLL DOWN"}                  :=  33;
+ked_xa_ambig_idx {"SCROLL TOP"}                   :=  34;
+ked_xa_ambig_idx {"SCROLL BOTTOM"}                :=  35;
+ked_xa_ambig_idx {"SCROLL CENTRE"}                :=  36;
+ked_xa_ambig_idx {"SORT BUFFER"}                  :=  37;
+ked_xa_ambig_idx {"SHUTDOWN"}                     :=  38;
+ked_xa_ambig_idx {"SUPPRESS MESSAGES"}            :=  39;
+ked_xa_ambig_idx {"SQUISH"}                       :=  40;
+ked_xa_ambig_idx {"STORE TEXT"}                   :=  41;
+ked_xa_ambig_idx {"SPELL"}                        :=  42;
+ked_xa_ambig_idx {"SET WIDTH"}                    :=  43;
+ked_xa_ambig_idx {"SET SCROLL ON"}                :=  44;
+ked_xa_ambig_idx {"SET SCROLL OFF"}               :=  45;
+ked_xa_ambig_idx {"SET SCROLL SMOOTH"}            :=  46;
+ked_xa_ambig_idx {"SET SCROLL JUMP"}              :=  47;
+ked_xa_ambig_idx {"SET SCROLL MARGINS"}           :=  48;
+ked_xa_ambig_idx {"SET BUFFER"}                   :=  49;
+ked_xa_ambig_idx {"SET KEYPAD NUMERIC"}           :=  50;
+ked_xa_ambig_idx {"SET KEYPAD EDT"}               :=  51;
+ked_xa_ambig_idx {"SET KEYPAD NOEDT"}             :=  52;
+ked_xa_ambig_idx {"SET KEYPAD WPS"}               :=  53;
+ked_xa_ambig_idx {"SET KEYPAD NOWPS"}             :=  54;
+ked_xa_ambig_idx {"SET KEYPAD VT100"}             :=  55;
+ked_xa_ambig_idx {"SET LEFT MARGIN"}              :=  56;
+ked_xa_ambig_idx {"SET RIGHT MARGIN"}             :=  57;
+ked_xa_ambig_idx {"SET WRAP"}                     :=  58;
+ked_xa_ambig_idx {"SET NOWRAP"}                   :=  59;
+ked_xa_ambig_idx {"SET BOX PAD"}                  :=  60;
+ked_xa_ambig_idx {"SET BOX NOPAD"}                :=  61;
+ked_xa_ambig_idx {"SET BOX SELECT"}               :=  62;
+ked_xa_ambig_idx {"SET BOX NOSELECT"}             :=  63;
+ked_xa_ambig_idx {"SET WILDCARD VMS"}             :=  64;
+ked_xa_ambig_idx {"SET WILDCARD ULTRIX"}          :=  65;
+ked_xa_ambig_idx {"SET BACKUP CONTROL STRING"}    :=  -1;
+ked_xa_ambig_idx {"SET JOURNALING"}               :=  66;
+ked_xa_ambig_idx {"SET NOJOURNALING"}             :=  67;
+ked_xa_ambig_idx {"SET JOURNALING ALL"}           :=  68;
+ked_xa_ambig_idx {"SET NOJOURNALING ALL"}         :=  69;
+ked_xa_ambig_idx {"SET NOFILE BACKUP"}            :=  -1;
+ked_xa_ambig_idx {"SET FILE BACKUP"}              :=  -1;
+ked_xa_ambig_idx {"SET CURSOR FREE"}              :=  69;
+ked_xa_ambig_idx {"SET CURSOR BOUND"}             :=  70;
+ked_xa_ambig_idx {"SET FIND CASE EXACT"}          :=  71;
+ked_xa_ambig_idx {"SET FIND CASE NOEXACT"}        :=  72;
+ked_xa_ambig_idx {"SET FIND CASE INSENSITIVE"}    :=  73;
+ked_xa_ambig_idx {"SET FIND DIRECTION CHANGE"}    :=  74;
+ked_xa_ambig_idx {"SET FIND NODIRECTION CHANGE"}  :=  75;
+ked_xa_ambig_idx {"SET FIND WHITESPACE"}          :=  76;
+ked_xa_ambig_idx {"SET FIND NOWHITESPACE"}        :=  77;
+ked_xa_ambig_idx {"SET FIND ALL HIDE"}            :=  78;
+ked_xa_ambig_idx {"SET FIND ALL NOHIDE"}          :=  79;
+ked_xa_ambig_idx {"SET FIND CURRENT POSITION"}    :=  80;
+ked_xa_ambig_idx {"SET FIND NOCURRENT POSITION"}  :=  81;
+ked_xa_ambig_idx {"SET PENDING DELETE"}           :=  82;
+ked_xa_ambig_idx {"SET NOPENDING DELETE"}         :=  83;
+ked_xa_ambig_idx {"SET DEFAULT SECTION FILE"}     :=  84;
+ked_xa_ambig_idx {"SET DEFAULT COMMAND FILE"}     :=  85;
+ked_xa_ambig_idx {"SET NODEFAULT SECTION FILE"}   :=  86;
+ked_xa_ambig_idx {"SET NODEFAULT COMMAND FILE"}   :=  87;
+ked_xa_ambig_idx {"SET SECTION FILE PROMPTING"}   :=  88;
+ked_xa_ambig_idx {"SET NOSECTION FILE PROMPTING"} :=  89;
+ked_xa_ambig_idx {"SET SELECTION GRAB SELECTION"} :=  90;
+ked_xa_ambig_idx {"SET EXIT ATTRIBUTE CHECK"}     :=  91;
+ked_xa_ambig_idx {"SET NOEXIT ATTRIBUTE CHECK"}   :=  92;
+ked_xa_ambig_idx {"SET PARAGRAPH INDENT"}         :=  93;
+ked_xa_ambig_idx {"SET SELECTION GRAB FOCUS"}     :=  94;
+ked_xa_ambig_idx {"SET FILL TAGS"}                :=  95;
+ked_xa_ambig_idx {"SET FILL NOTAGS"}              :=  96;
+ked_xa_ambig_idx {"SET TABS"}                     :=  97;
+ked_xa_ambig_idx {"SET NOSHIFT KEY"}              :=  98;
+ked_xa_ambig_idx {"SET NOGOLD KEY"}               :=  99;
+ked_xa_ambig_idx {"SET SHIFT KEY"}                := 100;
+ked_xa_ambig_idx {"SET GOLD KEY"}                 := 101;
+ked_xa_ambig_idx {"SET ENTITY PAGE"}              := 102;
+ked_xa_ambig_idx {"SET EXIT DEFAULT"}             := 103;
+ked_xa_ambig_idx {"SET QUIT DEFAULT"}             := 106;
+ked_xa_ambig_idx {"SET BRACKET RANGE DEFAULT"}    := 109;
+ked_xa_ambig_idx {"SET TIME FORMAT"}              := 110;
+ked_xa_ambig_idx {"SET DATE FORMAT"}              := 111;
+ked_xa_ambig_idx {"SET CHOP DELIMITER"}           := 112;
+ked_xa_ambig_idx {"SET SORTKEY"}                  := 113;
+ked_xa_ambig_idx {"SET SORTKEY ASCENDING"}        := 114;
+ked_xa_ambig_idx {"SET SORTKEY DESCENDING"}       := 115;
+ked_xa_ambig_idx {"SET DCL"}                      := 116;
+ked_xa_ambig_idx {"SET NODCL"}                    := 117;
+ked_xa_ambig_idx {"SET INDENT AUTOCORRECT"}       := 118;
+ked_xa_ambig_idx {"SET INDENT NOAUTOCORRECT"}     := 119;
+ked_xa_ambig_idx {"SET CLIPBOARD"}                := 120;
+ked_xa_ambig_idx {"SET NOCLIPBOARD"}              := 121;
+ked_xa_ambig_idx {"SET FUNCTION KEYS MOTIF"}      := 122;
+ked_xa_ambig_idx {"SET FUNCTION KEYS NOMOTIF"}    := 123;
+ked_xa_ambig_idx {"TOP"}                          :=   1;
+ked_xa_ambig_idx {"TAB"}                          :=   2;
+ked_xa_ambig_idx {"TWO WINDOWS"}                  :=   3;
+ked_xa_ambig_idx {"TPU"}                          :=   4;
+ked_xa_ambig_idx {"TRIM"}                         :=  -1;
+ked_xa_ambig_idx {"TRIM BUFFER"}                  :=   5;
+ked_xa_ambig_idx {"TRIM RANGE"}                   :=   6;
+ked_xa_ambig_idx {"UNDEFINE"}                     :=  -1;
+ked_xa_ambig_idx {"UNDEFINE_KEY"}                 :=   1;
+ked_xa_ambig_idx {"UNDEFINE_MENU_ENTRY"}          :=   2;
+ked_xa_ambig_idx {"UNSUPPRESS_MESSAGES"}          :=   3;
+ked_xa_ambig_idx {"UPPERCASE_WORD"}               :=   4;
+ked_xa_ambig_idx {"WILDCARD FIND"}                :=   1;
+ked_xa_ambig_idx {"WILDCARD FIND ALL"}            :=   2;
+ked_xa_ambig_idx {"WHAT LINE"}                    :=   3;
+ked_xa_ambig_idx {"WRITE FILE"}                   :=   4;
+ked_xa_ambig_idx {"WINDOW SAVE"}                  :=   5;
+ked_xa_ambig_idx {"WINDOW RESTORE"}               :=   6;
+
+! The following commands make no sense if running ked
+! not in 'kept' mode (You can delete these lines if you
+! are not including KED.TPU in your build).
+
+if ked_xl_running_kept <> TRUE
+then
+  ked_xa_ambig_idx {"EXIT ALL"}                   :=   -1;
+  ked_xa_ambig_idx {"EXIT SESSION"}               :=   -1;
+  ked_xa_ambig_idx {"EXIT THIS"}                  :=   -1;
+  ked_xa_ambig_idx {"QUIT ALL"}                   :=   -1;
+  ked_xa_ambig_idx {"QUIT SESSION"}               :=   -1;
+  ked_xa_ambig_idx {"QUIT THIS"}                  :=   -1;
+  ked_xa_ambig_idx {"MODIFY DEFAULT"}             :=   -1;
+  ked_xa_ambig_idx {"REWRITE"}                    :=   -1;
+endif;
+
+return (TRUE);
+
+endprocedure;  ! ked_init_ambig_cmd_processing
+! -+-+-
+!
+
+procedure ked_arrange_choices
+
+local has_changed,	! Has the order changed?
+      the_choice,	! The next choice
+      the_num,		! The sequence number for that choice
+      curr_pos,		! Save the current position
+      expanded_command;	! The expanded command name, if exactly one
+
+if ked_xa_ambig_idx = TPU$K_UNSPECIFIED			! Create/initialise
+then							! the array/buffers
+  ked_ambig_cmd_module_init;
+endif;
+curr_pos := mark (NONE);
+has_changed := 0;
+
+erase (ked_xb_ambig_choice_buf);			! Clear buffers and
+erase (ked_xb_ambig_saved_buf);				! save current choice
+position (ked_xb_ambig_saved_buf);			! buffer.
+copy_text (eve$choice_buffer);
+position (beginning_of(eve$choice_buffer));
+loop							! Move contents of
+  curr_pos := mark(NONE);				! choice buffer into
+  exitif curr_pos = end_of (current_buffer);		! ambig buffer, in
+  the_choice := current_line;				! required order
+  the_num    := ked_xa_ambig_idx {the_choice};
+  if the_num <> TPU$K_UNSPECIFIED
+  then
+    has_changed := 1;
+    if the_num > 0
+    then
+      position (end_of(ked_xb_ambig_choice_buf));
+      loop
+        exitif the_num <= get_info(ked_xb_ambig_choice_buf,"record_count");
+        split_line;
+      endloop;
+      position (the_num);
+      if current_line <> ""				! Separate options
+      then						! with same values by
+        position (line_end);				! a slash
+        copy_text("/");
+      endif;
+      copy_text(the_choice);
+      position (curr_pos);
+    endif;
+    erase_line;
+  else							! Leave it behind if it
+    move_vertical (1);					! is not in the array.
+  endif;
+endloop;
+if has_changed
+then							! Put it back in choice
+  position (beginning_of(eve$choice_buffer));		! buffer, and copy any
+  copy_text (ked_xb_ambig_choice_buf);			! left behind (i.e no
+  position (beginning_of(eve$choice_buffer));		! assigned value).
+  loop
+    curr_pos :=  search_quietly((line_begin & line_end) | "/",forward,exact);
+    exitif (curr_pos = 0);
+    position (curr_pos);				! Looping through the
+    if str (curr_pos) = "/"				! choices, splitting
+    then						! slash separarated
+      erase(curr_pos);					! options, and removing
+      split_line;					! any blank lines.
+    else
+      erase_line;
+    endif;
+  endloop;
+endif;
+if (get_info(eve$choice_buffer,"record_count") = 1) and ! There is only 1 left,
+   (eve$$x_state_array {eve$$k_help_active} = 0)	! and we're trying to
+then							! do it (not asking for 
+  eve$$x_state_array {eve$$k_ambiguous_parse} := FALSE;	! help on it), so it's
+  position (1);						! not really ambiguous.
+  expanded_command := current_line;			! So let's just do it.
+  eve$unmap_if_mapped (eve$choice_window);
+  eve$goto_command_window;
+  position (buffer_end);
+  copy_text (eve$x_command_prompt + expanded_command);
+  map (eve$command_window, eve$command_buffer);
+  eve$$exit_command_window;
+  return (TRUE);
+endif;
+if get_info (eve$choice_buffer,"record_count") <= 1	! No choice left, so
+then							! reinstate original
+  erase (eve$choice_buffer);				! choices.
+  position (eve$choice_buffer);
+  copy_text (ked_xb_ambig_saved_buf);
+endif;
+position (curr_pos);
+return (FALSE); 
+
+endprocedure;  ! ked_arrange_choices
+! -+-+-
+!
+
+procedure eve$display_choices		! Prepare choices for display
+    (message_to_display,	! Error message for message window.
+     command_name;	! The EVE command that has ambiguous arguments, along
+			! with any arguments before the ambiguous one.
+			! For example, "line 2 " if the LINE command were
+			! called with an ambiguous procedure name.  Note that
+			! no underscores are allowed in the command name.
+     the_argument)	! The ambiguous argument. For example if the user
+			! typed LINE 2 EVE_ where EVE_ is an ambiguous
+			! procedure name, then the command_name would be
+			! "line 2 ", and the_argument would be "EVE_".
+
+! Procedure to enable displaying of choices.  Leaves cursor in command window.
+
+! Customised run to ked_arrange_choices,			! JP Mar-2001
+
+local   last_reply,		! Last reply of prompt string
+	last_command,		! Command invoked by a key
+	saved_window,
+	saved_mark;
+
+on_error
+    [TPU$_CONTROLC]:
+	eve$$restore_position (saved_window, saved_mark);
+	eve$learn_abort;
+	abort;
+    [OTHERWISE]:
+	eve$$restore_position (saved_window, saved_mark);
+endon_error;
+
+saved_window := current_window;
+saved_mark := mark (FREE_CURSOR);
+
+eve$message (message_to_display);
+
+! If no default buffer exists, then we're most likely executing
+! an ambiguous command from a /COMMAND file.  Just abort.
+
+if get_info (eve$default_buffer, "type") <> BUFFER
+then
+    eve$learn_abort;
+    return (FALSE);
+endif;
+
+!							! JP Mar-2001 ++++
+if command_name = ""
+then				! If it's the command that's ambiguous, then
+  if ked_arrange_choices	! rearrange the choices, and if that returns
+  then				! TRUE, it wasn't really ambiguous and we've
+    return;			! done it, so end now.
+  endif;				
+endif;
+!							! JP Mar-2001 ----
+position (end_of (eve$choice_buffer));
+eve$format_choices;
+eve$$x_state_array {eve$$k_ambiguous_parse} := TRUE;
+position (beginning_of (eve$choice_buffer));
+
+last_reply := "";
+if eve$$x_state_array {eve$$k_prompt_flag}
+then
+    position (end_of (eve$recall_line_buffer));
+    if mark (NONE) <> beginning_of (eve$recall_line_buffer)
+    then
+	move_vertical (-1);
+	last_reply := current_line;
+    endif;
+    eve$$x_state_array {eve$$k_prompt_flag} := 0;
+endif;
+
+if eve$$x_state_array {eve$$k_command_line_flag}
+then		! Command has been written in command buffer
+		! And EVE$PROCESS_COMMAND will map CHOICE_WINDOWS
+    if last_reply <> ""
+    then		! Command prompted for an argument
+	position (end_of (eve$command_buffer));
+	move_horizontal (-1);
+	! command buffer is unmodifiable after eve$$exit_command_window
+	set (RECORD_ATTRIBUTE, mark (NONE), MODIFIABLE, ON);
+	erase_line;
+	copy_text (eve$x_command_prompt + eve$x_do_line + " ");
+	eve$$x_choice_range := copy_text (last_reply);
+    else		! Command was complete on command line
+	if command_name <> ""
+	then		! Unamibiguous command with amiguous argument
+	    if (get_info (eve$$x_choice_range, "type") = RANGE)
+	    then
+		if (get_info (the_argument, "type") = STRING)
+		then	! Point the range at the ambiguous arg
+		    position (eve$$x_choice_range);
+		    ! command buffer=unmodifiable after eve$$exit_command_window
+		    set (RECORD_ATTRIBUTE, mark (NONE), MODIFIABLE, ON);
+		    erase (eve$$x_choice_range);
+		    copy_text (command_name);
+		    eve$$x_choice_range := copy_text (the_argument);
+		endif;
+	    endif;
+!	else
+!	    EVE$$X_CHOICE_RANGE was set in EVE$$EXIT_COMMAND_WINDOW
+	endif;
+    endif;
+else
+    ! Not a command -- from help or a key
+    if eve$$x_state_array {eve$$k_help_active} = 0 ! Let HELP handle ambiguous topics
+    then				! Otherwise, we need a command name.
+	! A key was defined to a command, and either the command or one of its
+	! arguments is ambiguous
+
+	eve$map_choices;
+	if command_name <> ""
+	then				! the EVE command finding the ambiguity
+	    last_command := command_name;
+	    if the_argument = tpu$k_unspecified
+	    then
+		last_reply := "";
+	    else
+		last_reply := the_argument;
+	    endif;
+	else				! the last key's definition = ambiguous
+	    last_command := eve$$lookup_comment (last_key, eve$x_key_map_list);
+	    translate (last_command, " ", "_");	! probably no args here
+	endif;
+	position (saved_window);	! so pre_command_window is set correctly
+	eve$$enter_command_window;	! by eve$$enter_c_w
+	copy_text (last_command);
+	eve$$x_choice_range := copy_text (last_reply);
+	eve$$set_command_line;
+    endif;
+endif;
+
+endprocedure;  ! eve$display_choices
+! -+-+-
+!
+
+ked_init_ambig_cmd_processing; ! Module initialization code
+
+endmodule;      ! ked_ambig_cmd
